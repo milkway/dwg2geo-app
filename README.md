@@ -21,14 +21,14 @@ The conversion is [`dwg2geo`](https://github.com/milkway/dwg2geo) — the audite
 
 ## Build & run locally
 
-Requires Rust (with the `wasm32-unknown-unknown` target) and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/).
+No Rust toolchain needed — the converter is the published [`dwg2geo` npm package](https://www.npmjs.com/package/dwg2geo) (the same audited core, compiled to WebAssembly), vendored into `web/pkg/` at build time and self-hosted with the site:
 
 ```bash
-./build.sh                          # builds web/pkg via wasm-pack
+./build.sh                          # fetches dwg2geo@<version> from npm into web/pkg
 python3 -m http.server -d web 8080  # then open http://localhost:8080
 ```
 
-`maplibre-gl` and `proj4` load from a CDN; the WebAssembly bundle is built locally into `web/pkg/` (git-ignored — regenerated on each deploy).
+To upgrade the converter, bump `VERSION` in `build.sh`. `maplibre-gl` and `proj4` load from a CDN; the wasm bundle is served from this site's own origin (`web/pkg/`, git-ignored — regenerated on each deploy).
 
 ## License
 

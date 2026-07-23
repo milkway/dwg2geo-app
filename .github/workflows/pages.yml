@@ -25,14 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build WebAssembly bundle
-        run: wasm-pack build --target web --release --out-dir web/pkg
+          node-version: 24
+      - name: Fetch published converter package (npm dwg2geo)
+        run: ./build.sh
       - name: Disable Jekyll
         run: touch web/.nojekyll
       - uses: actions/configure-pages@v5

@@ -2,7 +2,9 @@
 // drawings. The worker owns the WASM module and proj4, converts the DWG,
 // reprojects to WGS 84, and posts back a ready-to-render FeatureCollection.
 
-import init, { convert } from './pkg/dwg2geo_app.js';
+// The conversion module is the published npm package `dwg2geo`, vendored into
+// web/pkg/ by build.sh (self-hosted — no runtime CDN dependency for the wasm).
+import init, { convert } from './pkg/dwg2geo_wasm.js';
 import proj4 from 'https://cdn.jsdelivr.net/npm/proj4@2.15.0/+esm';
 
 const ready = init();

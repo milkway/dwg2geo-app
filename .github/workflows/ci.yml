@@ -8,18 +8,25 @@ env:
   ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: node24
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --check
-      - name: Clippy (wasm)
-        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
-      - name: Build wasm
-        run: cargo build --target wasm32-unknown-unknown --release
+          node-version: 24
+      - name: JS syntax
+        run: |
+          node --check web/app.js
+          node --check web/worker.js
+      - name: Fetch published converter package
+        run: ./build.sh
+      - name: Convert smoke test (garbage bytes must throw)
+        run: |
+          node --input-type=module -e "
+            import init, { convert } from './web/pkg/dwg2geo_wasm.js';
+            import { readFileSync } from 'node:fs';
+            await init({ module_or_path: readFileSync('./web/pkg/dwg2geo_wasm_bg.wasm') });
+            try { convert(new Uint8Array([1,2,3]), false, undefined); process.exit(1); }
+            catch { console.log('wasm loads and rejects garbage — OK'); }
+          "
