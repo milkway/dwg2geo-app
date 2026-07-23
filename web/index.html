@@ -6,12 +6,13 @@
 <title>dwg2geo — DWG to map, in your browser</title>
 <meta name="description" content="Upload a DWG drawing and see it as a GeoJSON layer on a map. Converted entirely in your browser with WebAssembly — the file never leaves your machine." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%BA%EF%B8%8F%3C/text%3E%3C/svg%3E" />
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+  integrity="sha384-MinO0mNliZ3vwppuPOUnGa+iq619pfMhLVUXfC4LHwSCvF9H+6P/KO4Q7qBOYV5V" crossorigin="anonymous" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">🗺️</span> dwg2geo <span class="brand-sub">web</span></div>
+  <div class="brand"><span class="logo" aria-hidden="true">🗺️</span> dwg2geo <span class="brand-sub">web</span></div>
   <div class="top-actions">
     <span class="privacy">🔒 100% in-browser — your file never leaves this device</span>
     <a class="ghlink" href="https://github.com/milkway/dwg2geo-app" target="_blank" rel="noopener">GitHub ↗</a>
@@ -23,9 +24,9 @@
     <section class="card">
       <h2>1 · Upload a DWG</h2>
       <label id="drop" class="drop" for="file">
-        <input id="file" type="file" accept=".dwg" hidden />
+        <input id="file" type="file" accept=".dwg" class="sr-only" />
         <div class="drop-inner">
-          <div class="drop-ic">⬆️</div>
+          <div class="drop-ic" aria-hidden="true">⬆️</div>
           <div><strong>Drop a .dwg here</strong> or click to browse</div>
           <div class="muted small">AutoCAD 2013+ (AC1027). Nothing is uploaded.</div>
         </div>
@@ -53,7 +54,7 @@
         </label>
       </details>
       <button id="convert" class="btn primary" disabled>Convert &amp; map →</button>
-      <div id="status" class="status"></div>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
     </section>
 
     <section class="card hidden" id="reportcard">
@@ -67,20 +68,28 @@
     </footer>
   </aside>
 
-  <div id="map" class="map">
+  <div class="map">
+    <div id="map"></div>
     <div id="emptymap" class="emptymap">
       <div class="emptymap-inner">
-        <div class="emptymap-ic">🗺️</div>
+        <div class="emptymap-ic" aria-hidden="true">🗺️</div>
         <h3>Your drawing will appear here</h3>
         <p class="muted">Upload a DWG, choose its CRS, and convert.</p>
+      </div>
+    </div>
+    <div id="busy" class="busy hidden" role="status" aria-live="polite">
+      <div class="busy-inner">
+        <div class="spinner" aria-hidden="true"></div>
+        <div id="busytext" class="busy-text">Converting…</div>
+        <div class="muted small">Reading the DWG and building geometry in your browser — large drawings can take a few seconds.</div>
       </div>
     </div>
     <div id="legend" class="legend hidden"></div>
   </div>
 </main>
 
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/proj4@2.15.0/dist/proj4.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"
+  integrity="sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj" crossorigin="anonymous"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>

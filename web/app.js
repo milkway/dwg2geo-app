@@ -1,10 +1,11 @@
 // dwg2geo web app — convert a DWG to GeoJSON in-browser (WASM), reproject to
-// WGS 84 with proj4, and render on a MapLibre map.
-
-import init, { convert } from './pkg/dwg2geo_app.js';
+// WGS 84 with proj4, and render on a MapLibre map. The heavy conversion +
+// reprojection runs in a Web Worker (web/worker.js) so the tab never freezes
+// and the UI can show honest upload / processing / done states.
 
 // ---- CRS catalog (SIRGAS 2000 / UTM South, the common Brazilian zones, plus
-// WGS 84 UTM South). proj4 knows EPSG:4326; the rest are registered here. ----
+// WGS 84 UTM South). The selected entry's proj4 `def` string is handed to the
+// worker, which owns proj4 and does the actual reprojection. ----
 const CRS = [
   { code: 'EPSG:31978', label: 'SIRGAS 2000 / UTM 18S', def: '+proj=utm +zone=18 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
   { code: 'EPSG:31979', label: 'SIRGAS 2000 / UTM 19S', def: '+proj=utm +zone=19 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
@@ -19,7 +20,6 @@ const CRS = [
   { code: 'EPSG:4326', label: 'WGS 84 (lon/lat — already geographic)', def: '+proj=longlat +datum=WGS84 +no_defs' },
   { code: 'CUSTOM', label: 'Custom proj4 / WKT…', def: null },
 ];
-for (const c of CRS) if (c.def) proj4.defs(c.code, c.def);
 
 // ---- DOM ----
 const $ = (id) => document.getElementById(id);
@@ -35,6 +35,8 @@ const reportCard = $('reportcard');
 const reportEl = $('report');
 const legend = $('legend');
 const emptyMap = $('emptymap');
+const busyOverlay = $('busy');
+const busyText = $('busytext');
 
 for (const c of CRS) {
   const opt = document.createElement('option');
@@ -47,45 +49,107 @@ crsSelect.addEventListener('change', () => {
   customWrap.classList.toggle('hidden', crsSelect.value !== 'CUSTOM');
 });
 
-// ---- Map (theme-aware Carto basemap, free & keyless) ----
-const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-const basemap = dark
-  ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-  : 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+// ---- Map — the same CARTO "light_all" raster basemap used by brt-sorocaba ----
+if (typeof maplibregl === 'undefined') {
+  document.getElementById('status').textContent =
+    'Map library failed to load (offline or blocked). Reload to try again.';
+  throw new Error('maplibre-gl unavailable');
+}
 const map = new maplibregl.Map({
   container: 'map',
-  style: basemap,
-  center: [-47.45, -23.5],
-  zoom: 4,
+  style: {
+    version: 8,
+    sources: {
+      base: {
+        type: 'raster',
+        tileSize: 256,
+        attribution:
+          '© <a href="https://carto.com/attributions">CARTO</a> · © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        tiles: ['a', 'b', 'c', 'd'].map(
+          (s) => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png`,
+        ),
+      },
+    },
+    layers: [{ id: 'base', type: 'raster', source: 'base' }],
+  },
+  center: [-47.463, -23.5],
+  zoom: 11,
   attributionControl: true,
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+let styleReady = false;
+map.on('load', () => { styleReady = true; });
+map.on('error', (e) => {
+  // Basemap tile/style errors shouldn't break the app — the drawing still renders.
+  console.warn('MapLibre error:', e && e.error);
+});
 
 const COLORS = { point: '#7c5cff', line: '#17b898', polygon: '#ff8a3d' };
 
+// ---- Conversion worker (owns the WASM module + proj4; keeps the UI free) ----
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+let pending = null; // { name } of the in-flight conversion
+
+worker.addEventListener('message', (e) => {
+  const job = pending;
+  pending = null;
+  setBusy(false);
+  convertBtn.disabled = false;
+  if (!job) return;
+  if (!e.data.ok) {
+    setStatus(`Conversion failed: ${e.data.error}`, 'err');
+    return;
+  }
+  try {
+    renderResult(e.data);
+  } catch (error) {
+    setStatus(`${error.message || error}`, 'err');
+  }
+});
+worker.addEventListener('error', (e) => {
+  pending = null;
+  setBusy(false);
+  convertBtn.disabled = false;
+  setStatus(`Worker error: ${e.message || 'failed to run conversion'}`, 'err');
+});
+
 // ---- State ----
-let wasmReady = false;
 let fileBytes = null;
+let fileName = '';
+let loadSeq = 0; // guards against out-of-order arrayBuffer() reads
 
-init().then(() => { wasmReady = true; maybeEnable(); });
-
-function maybeEnable() {
-  convertBtn.disabled = !(wasmReady && fileBytes);
+function clearFile() {
+  fileBytes = null;
+  fileName = '';
+  drop.classList.remove('loaded');
+  fileMeta.classList.add('hidden');
+  convertBtn.disabled = true;
 }
 
 // ---- File handling ----
 function acceptFile(file) {
   if (!file) return;
+  const seq = ++loadSeq;
   if (!file.name.toLowerCase().endsWith('.dwg')) {
-    setStatus(`"${file.name}" is not a .dwg file.`, 'err');
+    clearFile();
+    setStatus(`"${file.name}" is not a .dwg file — choose an AutoCAD .dwg.`, 'err');
     return;
   }
+  clearFile();
+  setStatus('Reading file…', 'busy');
   file.arrayBuffer().then((buf) => {
+    if (seq !== loadSeq) return; // a newer selection superseded this read
     fileBytes = new Uint8Array(buf);
+    fileName = file.name;
+    drop.classList.add('loaded');
     fileMeta.classList.remove('hidden');
-    fileMeta.innerHTML = `<strong>${escapeHtml(file.name)}</strong> · ${formatBytes(file.size)}`;
-    setStatus('', '');
-    maybeEnable();
+    fileMeta.innerHTML =
+      `<span class="ok-tick">✓</span> <strong>${escapeHtml(file.name)}</strong>` +
+      `<span class="muted"> · ${formatBytes(file.size)} · ready to convert</span>`;
+    setStatus('File loaded. Choose the CRS and convert.', 'ok');
+    convertBtn.disabled = false;
+  }).catch(() => {
+    if (seq === loadSeq) setStatus('Could not read that file.', 'err');
   });
 }
 fileInput.addEventListener('change', () => acceptFile(fileInput.files[0]));
@@ -99,88 +163,73 @@ drop.addEventListener('drop', (e) => {
 
 // ---- Convert ----
 convertBtn.addEventListener('click', () => {
-  if (!wasmReady || !fileBytes) return;
+  if (!fileBytes || pending) return;
   const polygonize = $('polygonize').checked;
   const tol = parseFloat($('tolerance').value);
   const curveTolerance = Number.isFinite(tol) && tol > 0 ? tol : undefined;
 
-  setStatus('Converting…', 'busy');
-  convertBtn.disabled = true;
+  let srcDef;
+  try {
+    srcDef = resolveSrcDef();
+  } catch (error) {
+    setStatus(error.message || String(error), 'err');
+    return;
+  }
 
-  // Defer so the busy status paints before the (synchronous) wasm call.
-  setTimeout(() => {
-    let result;
-    try {
-      result = convert(fileBytes, polygonize, curveTolerance);
-    } catch (error) {
-      setStatus(`Conversion failed: ${error}`, 'err');
-      convertBtn.disabled = false;
-      return;
-    }
-    try {
-      renderResult(result);
-    } catch (error) {
-      setStatus(`${error.message || error}`, 'err');
-    } finally {
-      convertBtn.disabled = false;
-    }
-  }, 30);
+  pending = { name: fileName };
+  convertBtn.disabled = true;
+  setStatus(`Converting ${fileName}…`, 'busy');
+  setBusy(true, `Converting ${fileName}…`);
+  worker.postMessage({ bytes: fileBytes, polygonize, tolerance: curveTolerance, srcDef });
 });
 
-function renderResult(result) {
-  const geojson = JSON.parse(result.geojson);
-  const proj = resolveProjection();
-  const reprojected = reproject(geojson, proj);
-
-  addToMap(reprojected);
-  const bounds = boundsOf(reprojected);
-  if (bounds) {
-    emptyMap.classList.add('hidden');
-    map.fitBounds(bounds, { padding: 48, maxZoom: 18, duration: 800 });
-  }
-  showReport(result, proj);
-  setStatus(`Mapped ${result.feature_count} feature${result.feature_count === 1 ? '' : 's'}.`, 'ok');
-}
-
-function resolveProjection() {
+function resolveSrcDef() {
   const code = crsSelect.value;
-  if (code === 'EPSG:4326') return null; // already lon/lat
+  if (code === 'EPSG:4326') return null; // already lon/lat — no reprojection
   if (code === 'CUSTOM') {
     const def = customInput.value.trim();
     if (!def) throw new Error('Enter a custom proj4/WKT string, or pick a CRS.');
-    proj4.defs('CUSTOM', def);
-    return proj4('CUSTOM', 'EPSG:4326');
+    return def; // the worker validates the projection before converting
   }
-  return proj4(code, 'EPSG:4326');
+  return CRS.find((c) => c.code === code).def;
 }
 
-// ---- Reprojection (deep-copies geometry, transforming every position) ----
-function reproject(geojson, proj) {
-  const fwd = proj ? (xy) => proj.forward(xy) : (xy) => xy;
-  const mapPos = (p) => {
-    const [x, y] = fwd([p[0], p[1]]);
-    return [x, y];
-  };
-  const mapCoords = (c) => {
-    if (typeof c[0] === 'number') return mapPos(c);
-    return c.map(mapCoords);
-  };
-  return {
-    type: 'FeatureCollection',
-    features: geojson.features.map((f) => ({
-      type: 'Feature',
-      properties: f.properties || {},
-      geometry: f.geometry ? { type: f.geometry.type, coordinates: mapCoords(f.geometry.coordinates) } : null,
-    })),
-  };
+function renderResult(data) {
+  showReport(data.report);
+  const n = data.report.feature_count;
+  if (!n || !data.bounds) {
+    // Successful parse but nothing renderable — keep an honest empty map.
+    clearMapLayers();
+    legend.classList.add('hidden');
+    emptyMap.classList.remove('hidden');
+    emptyMap.querySelector('h3').textContent = 'No mappable geometry';
+    emptyMap.querySelector('p').textContent = 'The drawing converted, but no supported model-space entities produced coordinates. See the report.';
+    setStatus('Converted, but no mappable features were produced.', 'err');
+    return;
+  }
+  whenStyleReady(() => {
+    addToMap(data.fc);
+    emptyMap.classList.add('hidden');
+    // Zoom into the drawing's extent once it is on the map.
+    map.fitBounds(data.bounds, { padding: 56, maxZoom: 19, duration: 900 });
+  });
+  setStatus(`✓ Mapped ${n} feature${n === 1 ? '' : 's'}.`, 'ok');
+}
+
+function whenStyleReady(cb) {
+  if (styleReady || map.isStyleLoaded()) cb();
+  else map.once('load', cb);
 }
 
 // ---- Map layers ----
 const SRC = 'dwg';
-function addToMap(fc) {
+function clearMapLayers() {
   for (const id of ['dwg-fill', 'dwg-line', 'dwg-outline', 'dwg-point']) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
+}
+function addToMap(fc) {
+  clearMapLayers();
   if (map.getSource(SRC)) map.getSource(SRC).setData(fc);
   else map.addSource(SRC, { type: 'geojson', data: fc });
 
@@ -211,7 +260,7 @@ function bindPopup() {
       const p = e.features[0].properties || {};
       const rows = ['entity_type', 'layer', 'handle', 'text', 'block_name', 'color_index', 'linetype']
         .filter((k) => p[k] !== undefined && p[k] !== '')
-        .map((k) => `<tr><td>${k}</td><td>${escapeHtml(String(p[k]))}</td></tr>`)
+        .map((k) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(p[k]))}</td></tr>`)
         .join('');
       popup.setLngLat(e.lngLat).setHTML(`<table class="pop">${rows}</table>`).addTo(map);
     });
@@ -228,34 +277,23 @@ function showLegend() {
     <div><span class="sw" style="background:${COLORS.polygon}"></span>Polygons</div>`;
 }
 
-function boundsOf(fc) {
-  let b = null;
-  const ext = (x, y) => {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    if (!b) b = [x, y, x, y];
-    else { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); }
-  };
-  const walk = (c) => { if (typeof c[0] === 'number') ext(c[0], c[1]); else c.forEach(walk); };
-  for (const f of fc.features) if (f.geometry) walk(f.geometry.coordinates);
-  return b ? [[b[0], b[1]], [b[2], b[3]]] : null;
-}
-
 // ---- Report ----
-function showReport(result, proj) {
+function showReport(report) {
   reportCard.classList.remove('hidden');
   const rows = (arr) => arr.map((o) => `<tr><td>${escapeHtml(o.entity_type)}</td><td>${o.count}</td>${o.reason ? `<td class="muted">${escapeHtml(o.reason)}</td>` : ''}</tr>`).join('');
-  const skipped = result.skipped || [];
-  const failed = result.failed || [];
-  const warnings = result.warnings || [];
+  const converted = report.converted || [];
+  const skipped = report.skipped || [];
+  const failed = report.failed || [];
+  const warnings = report.warnings || [];
   reportEl.innerHTML = `
     <div class="stat-row">
-      <div class="stat"><b>${result.feature_count}</b><span>features</span></div>
-      <div class="stat"><b>${result.model_space_entities}</b><span>model-space entities</span></div>
+      <div class="stat"><b>${report.feature_count}</b><span>features</span></div>
+      <div class="stat"><b>${report.model_space_entities}</b><span>model-space entities</span></div>
       <div class="stat"><b>${skipped.reduce((s, o) => s + o.count, 0)}</b><span>skipped</span></div>
       <div class="stat"><b>${failed.reduce((s, o) => s + o.count, 0)}</b><span>failed</span></div>
     </div>
-    <p class="muted small">${proj ? `Reprojected from ${escapeHtml(crsSelect.value)} to WGS 84.` : 'Coordinates used as WGS 84 lon/lat.'} · SHA-256 <code>${result.source_sha256.slice(0, 12)}…</code></p>
-    ${result.converted?.length ? `<h4>Converted</h4><table class="rep">${rows(result.converted)}</table>` : ''}
+    <p class="muted small">${report.reprojected ? `Reprojected from ${escapeHtml(crsSelect.value)} to WGS 84.` : 'Coordinates used as WGS 84 lon/lat.'} · SHA-256 <code>${escapeHtml(String(report.source_sha256).slice(0, 12))}…</code></p>
+    ${converted.length ? `<h4>Converted</h4><table class="rep">${rows(converted)}</table>` : ''}
     ${skipped.length ? `<h4>Skipped</h4><table class="rep">${rows(skipped)}</table>` : ''}
     ${failed.length ? `<h4>Failed</h4><table class="rep">${rows(failed)}</table>` : ''}
     ${warnings.length ? `<h4>Warnings</h4><ul class="warn">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}`;
@@ -266,11 +304,16 @@ function setStatus(msg, kind) {
   statusEl.textContent = msg;
   statusEl.className = `status ${kind || ''}`;
 }
+function setBusy(on, text) {
+  if (text) busyText.textContent = text;
+  busyOverlay.classList.toggle('hidden', !on);
+  convertBtn.classList.toggle('loading', on);
+}
 function formatBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
