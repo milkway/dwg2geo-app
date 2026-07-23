@@ -16,7 +16,8 @@ The conversion is [`dwg2geo`](https://github.com/milkway/dwg2geo) — the audite
 
 1. **Convert** — the DWG bytes go to the WASM module, which returns a GeoJSON `FeatureCollection` in the drawing's local coordinates, plus a conversion report (feature counts, skipped/failed entities with reasons, warnings, bounding box).
 2. **Georeference** — you choose the drawing's source CRS (SIRGAS 2000 / UTM zones, WGS 84 / UTM, or a custom proj4 string). The app reprojects every coordinate to WGS 84 in the browser with [proj4js](http://proj4js.org/).
-3. **Map** — the reprojected features are drawn on MapLibre over a free basemap, styled with each entity's own CAD **colour** and **line weight**, with **TEXT/MTEXT rendered as rotated labels**. A per-drawing **layer panel** lets you toggle each DWG layer, and the view fits the drawing's bounds. Click a feature to inspect its CAD properties.
+3. **Map** — the reprojected features are drawn on MapLibre over a free basemap (**streets or satellite imagery**), styled with each entity's own CAD **colour** and **line weight**, with **TEXT/MTEXT rendered as rotated labels**. A floating **Layers menu** on the map lets you toggle each imported DWG layer (and the text labels), and the view fits the drawing's bounds. Click a feature to inspect its CAD properties.
+4. **Export** — download the reprojected WGS 84 GeoJSON with one click, ready for QGIS, geojson.io, or any GIS pipeline.
 
 ## Build & run locally
 

@@ -76,6 +76,8 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; }
 }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:not(:disabled):hover { filter: brightness(1.06); }
+.btn.secondary { background: none; border: 1px solid var(--border); color: var(--fg); margin-top: 10px; }
+.btn.secondary:not(:disabled):hover { border-color: var(--brand); filter: none; }
 .btn.loading { position: relative; color: transparent; }
 .btn.loading::after {
   content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%;
@@ -112,22 +114,28 @@ ul.warn { margin: 4px 0 0; padding-left: 18px; font-size: .82rem; color: var(--m
 .spinner { width: 40px; height: 40px; margin: 0 auto; border-radius: 50%;
   border: 4px solid var(--border); border-top-color: var(--brand); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.legend {
-  position: absolute; left: 12px; bottom: 26px; z-index: 2;
-  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-  padding: 8px 12px; font-size: .82rem; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 6px 20px rgba(0,0,0,.2);
-}
-.legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 table.pop { border-collapse: collapse; font-size: .8rem; }
 table.pop td { padding: 2px 6px; }
 table.pop td:first-child { color: #56648a; font-weight: 600; }
 
-.layers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.layers-head h2 { margin: 0; }
+/* Floating layers menu over the map */
+.layersmenu { position: absolute; top: 12px; left: 12px; z-index: 3; max-width: min(320px, calc(100% - 70px)); }
+.layersbtn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--fg);
+  font: inherit; font-weight: 700; font-size: .86rem; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+}
+.layersbtn:hover { border-color: var(--brand); }
+.layerspanel {
+  margin-top: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; box-shadow: 0 10px 32px rgba(0,0,0,.24); font-size: .84rem;
+}
+.layers-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.layers-head .check { margin: 0; font-size: .84rem; }
 .linkbtn { background: none; border: none; color: var(--brand-2); cursor: pointer; padding: 0; font: inherit; font-weight: 600; }
 .linkbtn:hover { text-decoration: underline; }
 .layer-actions { color: var(--muted); }
-.layerlist { max-height: 260px; overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px;
+.layerlist { max-height: min(46vh, 340px); overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px;
   border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--bg); }
 .layer-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 7px; cursor: pointer; font-size: .84rem; }
 .layer-row:hover { background: color-mix(in srgb, var(--brand) 8%, transparent); }
@@ -135,3 +143,16 @@ table.pop td:first-child { color: #56648a; font-weight: 600; }
 .layer-sw { width: 13px; height: 13px; border-radius: 3px; border: 1px solid var(--border); flex: 0 0 auto; }
 .layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Basemap switch (Streets / Satellite) */
+.basemapctl {
+  position: absolute; bottom: 26px; right: 12px; z-index: 3; display: flex;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: var(--card); box-shadow: 0 4px 16px rgba(0,0,0,.18);
+}
+.basemapctl button {
+  border: none; background: none; color: var(--fg); font: inherit; font-size: .82rem;
+  font-weight: 600; padding: 7px 12px; cursor: pointer;
+}
+.basemapctl button + button { border-left: 1px solid var(--border); }
+.basemapctl button.active { background: var(--brand); color: #fff; }

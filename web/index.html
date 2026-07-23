@@ -55,18 +55,7 @@
       </details>
       <button id="convert" class="btn primary" disabled>Convert &amp; map →</button>
       <div id="status" class="status" role="status" aria-live="polite"></div>
-    </section>
-
-    <section class="card hidden" id="layerscard">
-      <div class="layers-head">
-        <h2>Layers <span id="layercount" class="muted small"></span></h2>
-        <span class="layer-actions small">
-          <button type="button" id="layall" class="linkbtn">All</button> ·
-          <button type="button" id="laynone" class="linkbtn">None</button>
-        </span>
-      </div>
-      <label class="check"><input type="checkbox" id="labels" checked /> Show text labels</label>
-      <div id="layerlist" class="layerlist"></div>
+      <button id="download" class="btn secondary hidden" type="button">⬇ Download GeoJSON</button>
     </section>
 
     <section class="card hidden" id="reportcard">
@@ -82,6 +71,25 @@
 
   <div class="map">
     <div id="map"></div>
+    <div id="layersmenu" class="layersmenu hidden">
+      <button type="button" id="layersbtn" class="layersbtn" aria-expanded="true">
+        <span aria-hidden="true">🗂</span> Layers <span id="layercount" class="muted"></span>
+      </button>
+      <div id="layerscard" class="layerspanel">
+        <div class="layers-head">
+          <label class="check"><input type="checkbox" id="labels" checked /> Text labels</label>
+          <span class="layer-actions small">
+            <button type="button" id="layall" class="linkbtn">All</button> ·
+            <button type="button" id="laynone" class="linkbtn">None</button>
+          </span>
+        </div>
+        <div id="layerlist" class="layerlist"></div>
+      </div>
+    </div>
+    <div id="basemapctl" class="basemapctl" role="group" aria-label="Basemap">
+      <button type="button" data-base="streets" class="active">Streets</button>
+      <button type="button" data-base="sat">Satellite</button>
+    </div>
     <div id="emptymap" class="emptymap">
       <div class="emptymap-inner">
         <div class="emptymap-ic" aria-hidden="true">🗺️</div>

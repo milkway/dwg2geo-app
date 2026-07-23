@@ -295,7 +295,7 @@ dependencies = [
 [[package]]
 name = "dwg2geo"
 version = "0.1.0"
-source = "git+https://github.com/milkway/dwg2geo#f4c04aec6f2ea34b83463c455ca11febbc4efad7"
+source = "git+https://github.com/milkway/dwg2geo#dc8579c15b9e080c90fc36b47d6cc9d6a222bbcf"
 dependencies = [
  "acadrust",
  "anyhow",

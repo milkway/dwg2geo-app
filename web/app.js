@@ -36,12 +36,16 @@ const reportEl = $('report');
 const emptyMap = $('emptymap');
 const busyOverlay = $('busy');
 const busyText = $('busytext');
+const layersMenu = $('layersmenu');
+const layersBtn = $('layersbtn');
 const layersCard = $('layerscard');
 const layerList = $('layerlist');
 const layerCount = $('layercount');
 const labelsToggle = $('labels');
 const layerAll = $('layall');
 const layerNone = $('laynone');
+const basemapCtl = $('basemapctl');
+const downloadBtn = $('download');
 
 for (const c of CRS) {
   const opt = document.createElement('option');
@@ -75,8 +79,22 @@ const map = new maplibregl.Map({
           (s) => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png`,
         ),
       },
+      // Satellite imagery — the same Esri World Imagery source brt-sorocaba uses.
+      sat: {
+        type: 'raster',
+        tileSize: 256,
+        attribution: 'Esri, Maxar',
+        tiles: [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        ],
+      },
     },
-    layers: [{ id: 'base', type: 'raster', source: 'base' }],
+    // Both basemaps live in the style; switching toggles visibility so the
+    // DWG source/layers survive the change (map.setStyle would drop them).
+    layers: [
+      { id: 'base', type: 'raster', source: 'base' },
+      { id: 'sat', type: 'raster', source: 'sat', layout: { visibility: 'none' } },
+    ],
   },
   center: [-47.463, -23.5],
   zoom: 11,
@@ -91,31 +109,41 @@ map.on('error', (e) => {
 });
 
 // ---- Conversion worker (owns the WASM module + proj4; keeps the UI free) ----
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+let worker = null;
 let pending = null; // { name } of the in-flight conversion
 
-worker.addEventListener('message', (e) => {
+function onWorkerMessage(e) {
   const job = pending;
   pending = null;
   setBusy(false);
-  convertBtn.disabled = false;
+  convertBtn.disabled = !fileBytes;
   if (!job) return;
   if (!e.data.ok) {
     setStatus(`Conversion failed: ${e.data.error}`, 'err');
     return;
   }
   try {
-    renderResult(e.data);
+    renderResult(e.data, job.name);
   } catch (error) {
     setStatus(`${error.message || error}`, 'err');
   }
-});
-worker.addEventListener('error', (e) => {
+}
+function onWorkerError(e) {
+  // A load/runtime failure leaves the worker unusable — replace it so the
+  // next Convert click gets a fresh one instead of posting into a dead worker.
   pending = null;
   setBusy(false);
-  convertBtn.disabled = false;
-  setStatus(`Worker error: ${e.message || 'failed to run conversion'}`, 'err');
-});
+  convertBtn.disabled = !fileBytes;
+  setStatus(`Converter error: ${e.message || 'failed to run conversion'} — restarted, try again.`, 'err');
+  try { worker.terminate(); } catch { /* already dead */ }
+  spawnWorker();
+}
+function spawnWorker() {
+  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  worker.addEventListener('message', onWorkerMessage);
+  worker.addEventListener('error', onWorkerError);
+}
+spawnWorker();
 
 // ---- State ----
 let fileBytes = null;
@@ -198,13 +226,18 @@ function resolveSrcDef() {
   return CRS.find((c) => c.code === code).def;
 }
 
-function renderResult(data) {
+// Last successful conversion, kept for the GeoJSON download.
+let lastResult = null;
+
+function renderResult(data, name) {
   showReport(data.report);
   const n = data.report.feature_count;
   if (!n || !data.bounds) {
     // Successful parse but nothing renderable — keep an honest empty map.
     clearMapLayers();
-    layersCard.classList.add('hidden');
+    layersMenu.classList.add('hidden');
+    downloadBtn.classList.add('hidden');
+    lastResult = null;
     emptyMap.classList.remove('hidden');
     emptyMap.querySelector('h3').textContent = 'No mappable geometry';
     emptyMap.querySelector('p').textContent = 'The drawing converted, but no supported model-space entities produced coordinates. See the report.';
@@ -218,8 +251,24 @@ function renderResult(data) {
     // Zoom into the drawing's extent once it is on the map.
     map.fitBounds(data.bounds, { padding: 56, maxZoom: 19, duration: 900 });
   });
+  lastResult = { fc: data.fc, name };
+  downloadBtn.classList.remove('hidden');
   setStatus(`✓ Mapped ${n} feature${n === 1 ? '' : 's'}.`, 'ok');
 }
+
+// ---- Download the reprojected (WGS 84) GeoJSON ----
+downloadBtn.addEventListener('click', () => {
+  if (!lastResult) return;
+  const blob = new Blob([JSON.stringify(lastResult.fc)], { type: 'application/geo+json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${lastResult.name.replace(/\.dwg$/i, '')}.geojson`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
 
 function whenStyleReady(cb) {
   if (styleReady || map.isStyleLoaded()) cb();
@@ -289,8 +338,14 @@ function addToMap(fc) {
   bindPopup();
 }
 
+// Mirrors buildLayerPanel's bucketing exactly: missing, null, and empty layer
+// names all collapse to "(no layer)" so that toggle works for them too.
+const LAYER_KEY = ['case',
+  ['any', ['!', ['has', 'layer']], ['==', ['coalesce', ['get', 'layer'], ''], '']],
+  '(no layer)',
+  ['get', 'layer']];
 function layerVisibleExpr() {
-  return ['!', ['in', ['get', 'layer'], ['literal', [...hiddenLayers]]]];
+  return ['!', ['in', LAYER_KEY, ['literal', [...hiddenLayers]]]];
 }
 function applyLayerFilters() {
   const vis = layerVisibleExpr();
@@ -333,9 +388,10 @@ function buildLayerPanel(fc) {
       <span class="layer-name" title="${escapeHtml(name)}">${escapeHtml(name)}${s.hasText ? ' 🅣' : ''}</span>
       <span class="layer-count">${s.count}</span>
     </label>`).join('');
-  layerCount.textContent = `${layers.length} layer${layers.length === 1 ? '' : 's'}`;
+  layerCount.textContent = `(${layers.length})`;
   labelsToggle.checked = true;
-  layersCard.classList.remove('hidden');
+  layersMenu.classList.remove('hidden');
+  setLayersOpen(true);
 
   layerList.querySelectorAll('input[data-layer]').forEach((cb) => {
     cb.addEventListener('change', () => {
@@ -344,6 +400,9 @@ function buildLayerPanel(fc) {
       applyLayerFilters();
     });
   });
+  // Re-apply now that hiddenLayers/showLabels were reset — addToMap ran with
+  // the previous drawing's state.
+  applyLayerFilters();
 }
 function setAllLayers(visible) {
   layerList.querySelectorAll('input[data-layer]').forEach((cb) => { cb.checked = visible; });
@@ -354,6 +413,29 @@ function setAllLayers(visible) {
 layerAll.addEventListener('click', () => setAllLayers(true));
 layerNone.addEventListener('click', () => setAllLayers(false));
 labelsToggle.addEventListener('change', () => { showLabels = labelsToggle.checked; applyLayerFilters(); });
+
+// Collapse/expand the floating layers menu.
+function setLayersOpen(open) {
+  layersCard.classList.toggle('hidden', !open);
+  layersBtn.setAttribute('aria-expanded', String(open));
+}
+layersBtn.addEventListener('click', () => {
+  setLayersOpen(layersCard.classList.contains('hidden'));
+});
+
+// ---- Basemap switch (Streets ⇄ Satellite, mirroring brt-sorocaba) ----
+basemapCtl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-base]');
+  if (!btn) return;
+  const sat = btn.dataset.base === 'sat';
+  whenStyleReady(() => {
+    map.setLayoutProperty('base', 'visibility', sat ? 'none' : 'visible');
+    map.setLayoutProperty('sat', 'visibility', sat ? 'visible' : 'none');
+  });
+  for (const b of basemapCtl.querySelectorAll('button')) {
+    b.classList.toggle('active', b === btn);
+  }
+});
 
 let popupBound = false;
 function bindPopup() {

@@ -20,6 +20,12 @@ self.onmessage = async (event) => {
       self.postMessage({ ok: false, error: 'That proj4/WKT CRS string is not valid.' });
       return;
     }
+    // proj4 accepts some malformed strings (e.g. "+proj=utm" without a zone)
+    // and only fails at transform time — probe before the expensive conversion.
+    if (transform && !probeTransform(transform)) {
+      self.postMessage({ ok: false, error: 'That CRS definition produces invalid coordinates — check the proj4/WKT string.' });
+      return;
+    }
     const result = convert(bytes, polygonize, tolerance);
     const fc = JSON.parse(result.geojson);
     const reprojected = reproject(fc, transform);
@@ -43,6 +49,18 @@ self.onmessage = async (event) => {
     self.postMessage({ ok: false, error: String((error && error.message) || error) });
   }
 };
+
+// A usable projected CRS should map at least one of these representative
+// coordinates (origin / mid-range easting+northing) to finite lon/lat.
+function probeTransform(transform) {
+  for (const probe of [[0, 0], [500000, 5000000]]) {
+    try {
+      const r = transform.forward(probe);
+      if (Number.isFinite(r[0]) && Number.isFinite(r[1])) return true;
+    } catch { /* try the next probe */ }
+  }
+  return false;
+}
 
 function reproject(geojson, transform) {
   const fwd = transform ? (p) => transform.forward([p[0], p[1]]) : (p) => [p[0], p[1]];
