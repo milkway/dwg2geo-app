@@ -110,7 +110,7 @@ map.on('error', (e) => {
 
 // ---- Conversion worker (owns the WASM module + proj4; keeps the UI free) ----
 let worker = null;
-let pending = null; // { name } of the in-flight conversion
+let pending = null; // { name, crs } snapshot of the in-flight conversion
 
 function onWorkerMessage(e) {
   const job = pending;
@@ -123,7 +123,7 @@ function onWorkerMessage(e) {
     return;
   }
   try {
-    renderResult(e.data, job.name);
+    renderResult(e.data, job);
   } catch (error) {
     setStatus(`${error.message || error}`, 'err');
   }
@@ -208,7 +208,14 @@ convertBtn.addEventListener('click', () => {
     return;
   }
 
-  pending = { name: fileName };
+  // Snapshot the attribution now: the user may change the file or CRS
+  // selector while the worker runs, and the result must be labeled with
+  // what was actually converted.
+  pending = { name: fileName, crs: crsSelect.value };
+  // A stale download from the previous drawing must not survive into a run
+  // that might fail — it would silently offer the wrong file.
+  lastResult = null;
+  downloadBtn.classList.add('hidden');
   convertBtn.disabled = true;
   setStatus(`Converting ${fileName}…`, 'busy');
   setBusy(true, `Converting ${fileName}…`);
@@ -229,8 +236,8 @@ function resolveSrcDef() {
 // Last successful conversion, kept for the GeoJSON download.
 let lastResult = null;
 
-function renderResult(data, name) {
-  showReport(data.report);
+function renderResult(data, job) {
+  showReport(data.report, job);
   const n = data.report.feature_count;
   if (!n || !data.bounds) {
     // Successful parse but nothing renderable — keep an honest empty map.
@@ -251,9 +258,9 @@ function renderResult(data, name) {
     // Zoom into the drawing's extent once it is on the map.
     map.fitBounds(data.bounds, { padding: 56, maxZoom: 19, duration: 900 });
   });
-  lastResult = { fc: data.fc, name };
+  lastResult = { fc: data.fc, name: job.name };
   downloadBtn.classList.remove('hidden');
-  setStatus(`✓ Mapped ${n} feature${n === 1 ? '' : 's'}.`, 'ok');
+  setStatus(`✓ Mapped ${n} feature${n === 1 ? '' : 's'} from ${job.name}.`, 'ok');
 }
 
 // ---- Download the reprojected (WGS 84) GeoJSON ----
@@ -457,7 +464,7 @@ function bindPopup() {
 }
 
 // ---- Report ----
-function showReport(report) {
+function showReport(report, job) {
   reportCard.classList.remove('hidden');
   const rows = (arr) => arr.map((o) => `<tr><td>${escapeHtml(o.entity_type)}</td><td>${o.count}</td>${o.reason ? `<td class="muted">${escapeHtml(o.reason)}</td>` : ''}</tr>`).join('');
   const converted = report.converted || [];
@@ -471,7 +478,7 @@ function showReport(report) {
       <div class="stat"><b>${skipped.reduce((s, o) => s + o.count, 0)}</b><span>skipped</span></div>
       <div class="stat"><b>${failed.reduce((s, o) => s + o.count, 0)}</b><span>failed</span></div>
     </div>
-    <p class="muted small">${report.reprojected ? `Reprojected from ${escapeHtml(crsSelect.value)} to WGS 84.` : 'Coordinates used as WGS 84 lon/lat.'} · SHA-256 <code>${escapeHtml(String(report.source_sha256).slice(0, 12))}…</code></p>
+    <p class="muted small"><strong>${escapeHtml(job.name)}</strong> · ${report.reprojected ? `Reprojected from ${escapeHtml(job.crs)} to WGS 84.` : 'Coordinates used as WGS 84 lon/lat.'} · SHA-256 <code>${escapeHtml(String(report.source_sha256).slice(0, 12))}…</code></p>
     ${converted.length ? `<h4>Converted</h4><table class="rep">${rows(converted)}</table>` : ''}
     ${skipped.length ? `<h4>Skipped</h4><table class="rep">${rows(skipped)}</table>` : ''}
     ${failed.length ? `<h4>Failed</h4><table class="rep">${rows(failed)}</table>` : ''}
