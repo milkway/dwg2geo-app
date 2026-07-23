@@ -121,3 +121,17 @@ ul.warn { margin: 4px 0 0; padding-left: 18px; font-size: .82rem; color: var(--m
 table.pop { border-collapse: collapse; font-size: .8rem; }
 table.pop td { padding: 2px 6px; }
 table.pop td:first-child { color: #56648a; font-weight: 600; }
+
+.layers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.layers-head h2 { margin: 0; }
+.linkbtn { background: none; border: none; color: var(--brand-2); cursor: pointer; padding: 0; font: inherit; font-weight: 600; }
+.linkbtn:hover { text-decoration: underline; }
+.layer-actions { color: var(--muted); }
+.layerlist { max-height: 260px; overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--bg); }
+.layer-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 7px; cursor: pointer; font-size: .84rem; }
+.layer-row:hover { background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.layer-row input { margin: 0; }
+.layer-sw { width: 13px; height: 13px; border-radius: 3px; border: 1px solid var(--border); flex: 0 0 auto; }
+.layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }

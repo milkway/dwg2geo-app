@@ -57,6 +57,18 @@
       <div id="status" class="status" role="status" aria-live="polite"></div>
     </section>
 
+    <section class="card hidden" id="layerscard">
+      <div class="layers-head">
+        <h2>Layers <span id="layercount" class="muted small"></span></h2>
+        <span class="layer-actions small">
+          <button type="button" id="layall" class="linkbtn">All</button> ·
+          <button type="button" id="laynone" class="linkbtn">None</button>
+        </span>
+      </div>
+      <label class="check"><input type="checkbox" id="labels" checked /> Show text labels</label>
+      <div id="layerlist" class="layerlist"></div>
+    </section>
+
     <section class="card hidden" id="reportcard">
       <h2>Conversion report</h2>
       <div id="report"></div>
@@ -84,7 +96,6 @@
         <div class="muted small">Reading the DWG and building geometry in your browser — large drawings can take a few seconds.</div>
       </div>
     </div>
-    <div id="legend" class="legend hidden"></div>
   </div>
 </main>
 

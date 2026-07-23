@@ -33,10 +33,15 @@ const convertBtn = $('convert');
 const statusEl = $('status');
 const reportCard = $('reportcard');
 const reportEl = $('report');
-const legend = $('legend');
 const emptyMap = $('emptymap');
 const busyOverlay = $('busy');
 const busyText = $('busytext');
+const layersCard = $('layerscard');
+const layerList = $('layerlist');
+const layerCount = $('layercount');
+const labelsToggle = $('labels');
+const layerAll = $('layall');
+const layerNone = $('laynone');
 
 for (const c of CRS) {
   const opt = document.createElement('option');
@@ -59,6 +64,7 @@ const map = new maplibregl.Map({
   container: 'map',
   style: {
     version: 8,
+    glyphs: 'https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf',
     sources: {
       base: {
         type: 'raster',
@@ -83,8 +89,6 @@ map.on('error', (e) => {
   // Basemap tile/style errors shouldn't break the app — the drawing still renders.
   console.warn('MapLibre error:', e && e.error);
 });
-
-const COLORS = { point: '#7c5cff', line: '#17b898', polygon: '#ff8a3d' };
 
 // ---- Conversion worker (owns the WASM module + proj4; keeps the UI free) ----
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -200,7 +204,7 @@ function renderResult(data) {
   if (!n || !data.bounds) {
     // Successful parse but nothing renderable — keep an honest empty map.
     clearMapLayers();
-    legend.classList.add('hidden');
+    layersCard.classList.add('hidden');
     emptyMap.classList.remove('hidden');
     emptyMap.querySelector('h3').textContent = 'No mappable geometry';
     emptyMap.querySelector('p').textContent = 'The drawing converted, but no supported model-space entities produced coordinates. See the report.';
@@ -209,6 +213,7 @@ function renderResult(data) {
   }
   whenStyleReady(() => {
     addToMap(data.fc);
+    buildLayerPanel(data.fc);
     emptyMap.classList.add('hidden');
     // Zoom into the drawing's extent once it is on the map.
     map.fitBounds(data.bounds, { padding: 56, maxZoom: 19, duration: 900 });
@@ -222,43 +227,143 @@ function whenStyleReady(cb) {
 }
 
 // ---- Map layers ----
+// Every feature carries the CAD `color_rgb` and (often) `lineweight_mm`, so the
+// map mirrors the drawing's own colours and line widths instead of flat styles.
 const SRC = 'dwg';
+const RENDER_LAYERS = ['dwg-fill', 'dwg-outline', 'dwg-line-casing', 'dwg-line', 'dwg-point', 'dwg-text'];
+const cadColor = (fallback) => ['coalesce', ['get', 'color_rgb'], fallback];
+// Plot line weight is in mm; scale to a legible pixel width with a floor.
+const cadLineWidth = ['max', 0.8, ['*', ['coalesce', ['get', 'lineweight_mm'], 0.13], 10]];
+const GEOM = {
+  fill: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+  line: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+  point: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['!', ['has', 'text']]],
+  text: ['all', ['==', ['geometry-type'], 'Point'], ['has', 'text']],
+};
+
+// Per-DWG-layer visibility state.
+const hiddenLayers = new Set();
+let showLabels = true;
+
 function clearMapLayers() {
-  for (const id of ['dwg-fill', 'dwg-line', 'dwg-outline', 'dwg-point']) {
-    if (map.getLayer(id)) map.removeLayer(id);
-  }
+  for (const id of RENDER_LAYERS) if (map.getLayer(id)) map.removeLayer(id);
 }
+
 function addToMap(fc) {
   clearMapLayers();
   if (map.getSource(SRC)) map.getSource(SRC).setData(fc);
   else map.addSource(SRC, { type: 'geojson', data: fc });
 
   map.addLayer({ id: 'dwg-fill', type: 'fill', source: SRC,
-    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-    paint: { 'fill-color': COLORS.polygon, 'fill-opacity': 0.22 } });
+    paint: { 'fill-color': cadColor('#ff8a3d'), 'fill-opacity': 0.18 } });
   map.addLayer({ id: 'dwg-outline', type: 'line', source: SRC,
-    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-    paint: { 'line-color': COLORS.polygon, 'line-width': 1.4 } });
+    paint: { 'line-color': cadColor('#ff8a3d'), 'line-width': cadLineWidth } });
+  // A faint dark casing keeps light/white CAD colours visible on the basemap.
+  map.addLayer({ id: 'dwg-line-casing', type: 'line', source: SRC,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': 'rgba(20,28,48,0.35)', 'line-width': ['+', cadLineWidth, 1.4] } });
   map.addLayer({ id: 'dwg-line', type: 'line', source: SRC,
-    filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
-    paint: { 'line-color': COLORS.line, 'line-width': 1.8 } });
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': cadColor('#17b898'), 'line-width': cadLineWidth } });
   map.addLayer({ id: 'dwg-point', type: 'circle', source: SRC,
-    filter: ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false],
-    paint: { 'circle-color': COLORS.point, 'circle-radius': 4, 'circle-stroke-width': 1, 'circle-stroke-color': '#fff' } });
+    paint: { 'circle-color': cadColor('#7c5cff'), 'circle-radius': 3.5,
+      'circle-stroke-width': 1, 'circle-stroke-color': 'rgba(255,255,255,0.85)' } });
+  // Text/MTEXT features become real labels, rotated to match the drawing.
+  map.addLayer({ id: 'dwg-text', type: 'symbol', source: SRC,
+    layout: {
+      'text-field': ['coalesce', ['get', 'text'], ''],
+      'text-size': 12,
+      'text-font': ['Open Sans Regular'],
+      'text-rotation-alignment': 'map',
+      'text-rotate': ['-', 0, ['coalesce', ['get', 'text_rotation_deg'], 0]],
+      'text-allow-overlap': false,
+      'text-max-width': 20,
+    },
+    paint: {
+      'text-color': cadColor('#10306a'),
+      'text-halo-color': 'rgba(255,255,255,0.92)',
+      'text-halo-width': 1.4,
+    } });
 
+  applyLayerFilters();
   bindPopup();
-  showLegend();
 }
+
+function layerVisibleExpr() {
+  return ['!', ['in', ['get', 'layer'], ['literal', [...hiddenLayers]]]];
+}
+function applyLayerFilters() {
+  const vis = layerVisibleExpr();
+  const set = (id, geom) => { if (map.getLayer(id)) map.setFilter(id, ['all', geom, vis]); };
+  set('dwg-fill', GEOM.fill);
+  set('dwg-outline', GEOM.fill);
+  set('dwg-line-casing', GEOM.line);
+  set('dwg-line', GEOM.line);
+  set('dwg-point', GEOM.point);
+  set('dwg-text', GEOM.text);
+  if (map.getLayer('dwg-text')) {
+    map.setLayoutProperty('dwg-text', 'visibility', showLabels ? 'visible' : 'none');
+  }
+}
+
+// ---- Per-layer panel (toggle DWG layers, mirror their colours) ----
+function buildLayerPanel(fc) {
+  hiddenLayers.clear();
+  showLabels = true;
+  const stat = new Map(); // layer -> { count, colors: Map<hex,count>, hasText }
+  for (const f of fc.features) {
+    const p = f.properties || {};
+    const name = p.layer || '(no layer)';
+    let s = stat.get(name);
+    if (!s) { s = { count: 0, colors: new Map(), hasText: false }; stat.set(name, s); }
+    s.count += 1;
+    if (p.color_rgb) s.colors.set(p.color_rgb, (s.colors.get(p.color_rgb) || 0) + 1);
+    if (p.text) s.hasText = true;
+  }
+  const layers = [...stat.entries()].sort((a, b) => b[1].count - a[1].count);
+  const swatch = (colors) => {
+    let best = '#888', n = -1;
+    for (const [hex, c] of colors) if (c > n) { best = hex; n = c; }
+    return best;
+  };
+  layerList.innerHTML = layers.map(([name, s]) => `
+    <label class="layer-row">
+      <input type="checkbox" data-layer="${escapeHtml(name)}" checked />
+      <span class="layer-sw" style="background:${escapeHtml(swatch(s.colors))}"></span>
+      <span class="layer-name" title="${escapeHtml(name)}">${escapeHtml(name)}${s.hasText ? ' 🅣' : ''}</span>
+      <span class="layer-count">${s.count}</span>
+    </label>`).join('');
+  layerCount.textContent = `${layers.length} layer${layers.length === 1 ? '' : 's'}`;
+  labelsToggle.checked = true;
+  layersCard.classList.remove('hidden');
+
+  layerList.querySelectorAll('input[data-layer]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) hiddenLayers.delete(cb.dataset.layer);
+      else hiddenLayers.add(cb.dataset.layer);
+      applyLayerFilters();
+    });
+  });
+}
+function setAllLayers(visible) {
+  layerList.querySelectorAll('input[data-layer]').forEach((cb) => { cb.checked = visible; });
+  hiddenLayers.clear();
+  if (!visible) layerList.querySelectorAll('input[data-layer]').forEach((cb) => hiddenLayers.add(cb.dataset.layer));
+  applyLayerFilters();
+}
+layerAll.addEventListener('click', () => setAllLayers(true));
+layerNone.addEventListener('click', () => setAllLayers(false));
+labelsToggle.addEventListener('change', () => { showLabels = labelsToggle.checked; applyLayerFilters(); });
 
 let popupBound = false;
 function bindPopup() {
   if (popupBound) return;
   popupBound = true;
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: true });
-  for (const id of ['dwg-fill', 'dwg-line', 'dwg-point']) {
+  for (const id of ['dwg-fill', 'dwg-line', 'dwg-point', 'dwg-text']) {
     map.on('click', id, (e) => {
       const p = e.features[0].properties || {};
-      const rows = ['entity_type', 'layer', 'handle', 'text', 'block_name', 'color_index', 'linetype']
+      const rows = ['entity_type', 'layer', 'handle', 'text', 'block_name', 'color_index', 'color_rgb', 'lineweight_mm', 'linetype']
         .filter((k) => p[k] !== undefined && p[k] !== '')
         .map((k) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(p[k]))}</td></tr>`)
         .join('');
@@ -267,14 +372,6 @@ function bindPopup() {
     map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
   }
-}
-
-function showLegend() {
-  legend.classList.remove('hidden');
-  legend.innerHTML = `
-    <div><span class="sw" style="background:${COLORS.point}"></span>Points</div>
-    <div><span class="sw" style="background:${COLORS.line}"></span>Lines</div>
-    <div><span class="sw" style="background:${COLORS.polygon}"></span>Polygons</div>`;
 }
 
 // ---- Report ----
