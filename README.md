@@ -3,6 +3,7 @@
 [![CI](https://github.com/milkway/dwg2geo-app/actions/workflows/ci.yml/badge.svg)](https://github.com/milkway/dwg2geo-app/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![WebAssembly](https://img.shields.io/badge/runs-in%20the%20browser-8A2BE2.svg)](https://milkway.github.io/dwg2geo-app/)
+[![converter: npm dwg2geo](https://img.shields.io/npm/v/dwg2geo?label=converter%20(npm%20dwg2geo))](https://www.npmjs.com/package/dwg2geo)
 
 A browser app that turns a **DWG drawing into a map layer**. Upload a `.dwg`, pick its coordinate system, and see it rendered as GeoJSON on an interactive [MapLibre](https://maplibre.org/) map.
 
