@@ -156,3 +156,21 @@ table.pop td:first-child { color: #56648a; font-weight: 600; }
 }
 .basemapctl button + button { border-left: 1px solid var(--border); }
 .basemapctl button.active { background: var(--brand); color: #fff; }
+
+/* Bundled examples (CCSF basemap sheets) */
+.examples { margin-top: 12px; }
+.example-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
+.btn.example {
+  background: none; border: 1px dashed var(--border); color: var(--fg);
+  font-size: .85rem; font-weight: 500; padding: 8px 10px; text-align: left;
+}
+.btn.example:not(:disabled):hover { border-color: var(--brand); filter: none; }
+.tiny { font-size: .72rem; line-height: 1.35; }
+
+/* CRS suggestion hint (heuristic — suggests, never assumes) */
+.crshint {
+  margin: 2px 0 8px; padding: 8px 10px; border-radius: 8px; font-size: .8rem;
+  line-height: 1.45; background: rgba(90, 63, 240, .08);
+  border: 1px solid rgba(90, 63, 240, .35);
+}
+.crshint .linkbtn { font-weight: 600; }

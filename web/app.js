@@ -17,8 +17,19 @@ const CRS = [
   { code: 'EPSG:31985', label: 'SIRGAS 2000 / UTM 25S', def: '+proj=utm +zone=25 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
   { code: 'EPSG:32722', label: 'WGS 84 / UTM 22S', def: '+proj=utm +zone=22 +south +datum=WGS84 +units=m +no_defs' },
   { code: 'EPSG:32723', label: 'WGS 84 / UTM 23S', def: '+proj=utm +zone=23 +south +datum=WGS84 +units=m +no_defs' },
+  // The CRS of the CCSF Digital Basemap sheets bundled as examples (declared
+  // by San Francisco Public Works in the dataset metadata, not by the DWGs).
+  { code: 'EPSG:2227', label: 'NAD83 / California zone 3 (ftUS)', def: '+proj=lcc +lat_1=38.43333333333333 +lat_2=37.06666666666667 +lat_0=36.5 +lon_0=-120.5 +x_0=2000000.0001016 +y_0=500000.0001016002 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=us-ft +no_defs' },
   { code: 'EPSG:4326', label: 'WGS 84 (lon/lat — already geographic)', def: '+proj=longlat +datum=WGS84 +no_defs' },
   { code: 'CUSTOM', label: 'Custom proj4 / WKT…', def: null },
+];
+
+// ---- Bundled example drawings (fetched by build.sh, SHA-pinned). Loading one
+// prefills the CRS that the SOURCE declares — the drawing itself carries none,
+// which is exactly the failure mode dwg2geo exists to make explicit. ----
+const EXAMPLES = [
+  { file: 'sf00c.dwg', label: 'San Francisco basemap — sheet sf00c', crs: 'EPSG:2227' },
+  { file: 'sf01c.dwg', label: 'San Francisco basemap — sheet sf01c', crs: 'EPSG:2227' },
 ];
 
 // ---- DOM ----
@@ -46,6 +57,8 @@ const layerAll = $('layall');
 const layerNone = $('laynone');
 const basemapCtl = $('basemapctl');
 const downloadBtn = $('download');
+const crsHint = $('crshint');
+const exampleList = $('examplelist');
 
 for (const c of CRS) {
   const opt = document.createElement('option');
@@ -113,6 +126,10 @@ let worker = null;
 let pending = null; // { name, crs } snapshot of the in-flight conversion
 
 function onWorkerMessage(e) {
+  if (e.data && e.data.probe !== undefined) {
+    onProbeResult(e.data);
+    return;
+  }
   const job = pending;
   pending = null;
   setBusy(false);
@@ -149,6 +166,72 @@ spawnWorker();
 let fileBytes = null;
 let fileName = '';
 let loadSeq = 0; // guards against out-of-order arrayBuffer() reads
+let probeSeq = 0; // pairs probe replies with the file that requested them
+
+// ---- CRS suggestion (fail-closed by design: it only SUGGESTS) ----
+// The heuristic reads nothing but coordinate magnitudes from a quick probe
+// conversion, because a DWG carries no reliable CRS declaration — that is the
+// whole reason this app makes the operator choose. The bbox max corner is
+// used on purpose: title blocks and legends often sit near the drawing
+// origin and would poison the min corner.
+const PROBE_MAX_BYTES = 32 * 1024 * 1024;
+
+function suggestCrs(bbox) {
+  if (!bbox) return null;
+  const [minx, , maxx, maxy] = bbox;
+  if (Math.abs(minx) <= 180 && Math.abs(maxx) <= 180 && Math.abs(maxy) <= 90) {
+    return {
+      code: 'EPSG:4326',
+      text: 'Coordinates fit longitude/latitude ranges — this may already be WGS 84.',
+    };
+  }
+  if (maxx >= 5.5e6 && maxx <= 6.5e6 && maxy >= 1.7e6 && maxy <= 2.4e6) {
+    return {
+      code: 'EPSG:2227',
+      text: 'Extents match California State Plane zone 3 in US survey feet (the CRS the CCSF basemap declares).',
+    };
+  }
+  if (maxy >= 6.5e6 && maxy <= 1.0e7 && maxx >= 1e5 && maxx <= 1.1e6) {
+    return {
+      code: null,
+      text: 'Extents look like southern-hemisphere UTM in metres (e.g. a SIRGAS 2000 zone). The zone cannot be inferred from coordinates — pick it from the drawing’s documentation.',
+    };
+  }
+  return null;
+}
+
+function clearCrsHint() {
+  crsHint.classList.add('hidden');
+  crsHint.innerHTML = '';
+}
+
+function onProbeResult(data) {
+  if (data.seq !== probeSeq || !fileBytes) return; // a newer file superseded it
+  const suggestion = data.ok ? suggestCrs(data.bbox) : null;
+  if (!suggestion) { clearCrsHint(); return; }
+  crsHint.classList.remove('hidden');
+  crsHint.innerHTML =
+    `<span class="hint-ic" aria-hidden="true">💡</span> ${escapeHtml(suggestion.text)}` +
+    (suggestion.code && crsSelect.value !== suggestion.code
+      ? ` <button type="button" class="linkbtn" id="applyhint">Use ${escapeHtml(suggestion.code)}</button>`
+      : '') +
+    ' <span class="muted">Heuristic on coordinate magnitudes only — confirm before trusting the result.</span>';
+  const apply = document.getElementById('applyhint');
+  if (apply) {
+    apply.addEventListener('click', () => {
+      crsSelect.value = suggestion.code;
+      crsSelect.dispatchEvent(new Event('change'));
+      clearCrsHint();
+      setStatus(`Source CRS set to ${suggestion.code} — confirm it matches the drawing's documentation.`, 'ok');
+    });
+  }
+}
+
+function launchProbe() {
+  if (!fileBytes || fileBytes.length > PROBE_MAX_BYTES) return;
+  const seq = ++probeSeq;
+  worker.postMessage({ probe: true, seq, bytes: fileBytes });
+}
 
 function clearFile() {
   fileBytes = null;
@@ -156,6 +239,7 @@ function clearFile() {
   drop.classList.remove('loaded');
   fileMeta.classList.add('hidden');
   convertBtn.disabled = true;
+  clearCrsHint();
 }
 
 // ---- File handling ----
@@ -180,9 +264,54 @@ function acceptFile(file) {
       `<span class="muted"> · ${formatBytes(file.size)} · ready to convert</span>`;
     setStatus('File loaded. Choose the CRS and convert.', 'ok');
     convertBtn.disabled = false;
+    launchProbe();
   }).catch(() => {
     if (seq === loadSeq) setStatus('Could not read that file.', 'err');
   });
+}
+
+// ---- Bundled examples ----
+for (const example of EXAMPLES) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn example';
+  btn.textContent = example.label;
+  btn.addEventListener('click', () => loadExample(example, btn));
+  exampleList.appendChild(btn);
+}
+
+function loadExample(example, btn) {
+  const seq = ++loadSeq;
+  clearFile();
+  btn.disabled = true;
+  setStatus(`Loading ${example.file}…`, 'busy');
+  fetch(`examples/${example.file}`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then((buf) => {
+      btn.disabled = false;
+      if (seq !== loadSeq) return;
+      fileBytes = new Uint8Array(buf);
+      fileName = example.file;
+      drop.classList.add('loaded');
+      fileMeta.classList.remove('hidden');
+      fileMeta.innerHTML =
+        `<span class="ok-tick">✓</span> <strong>${escapeHtml(example.file)}</strong>` +
+        `<span class="muted"> · ${formatBytes(fileBytes.length)} · CCSF Digital Basemap (PDDL-1.0)</span>`;
+      // The DWG itself declares no CRS; this value comes from the dataset's
+      // OWN metadata page, which is why the app may prefill it honestly.
+      crsSelect.value = example.crs;
+      crsSelect.dispatchEvent(new Event('change'));
+      clearCrsHint();
+      setStatus(`Example loaded. Source CRS prefilled to ${example.crs} (declared by the publisher, not by the DWG) — convert when ready.`, 'ok');
+      convertBtn.disabled = false;
+    })
+    .catch((error) => {
+      btn.disabled = false;
+      if (seq === loadSeq) setStatus(`Could not load the example: ${error.message || error}`, 'err');
+    });
 }
 fileInput.addEventListener('change', () => acceptFile(fileInput.files[0]));
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });

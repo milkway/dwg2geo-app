@@ -32,6 +32,12 @@
         </div>
       </label>
       <div id="filemeta" class="filemeta hidden"></div>
+      <div class="examples">
+        <span class="muted small">…or try a real engineering sheet:</span>
+        <div id="examplelist" class="example-list"></div>
+        <p class="muted tiny">Examples: CCSF Digital Basemap, San Francisco Public
+        Works (PDDL-1.0, public domain). Loaded from this site — nothing is uploaded.</p>
+      </div>
     </section>
 
     <section class="card">
@@ -41,6 +47,7 @@
         <span>Source CRS</span>
         <select id="crs"></select>
       </label>
+      <div id="crshint" class="crshint hidden" role="note"></div>
       <label class="field hidden" id="customwrap">
         <span>Custom proj4 / WKT string</span>
         <input id="custom" type="text" placeholder="+proj=utm +zone=23 +south +ellps=GRS80 +units=m +no_defs" />
