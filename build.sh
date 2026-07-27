@@ -21,13 +21,18 @@ tar xzf "$tmp/dwg2geo-${VERSION}.tgz" -C web/pkg --strip-components=1
 # build instead of shipping.
 fetch_example() {
   local name="$1" snapshot="$2" sha="$3"
+  # The committed copy is authoritative when its digest matches; the snapshot
+  # is the recovery path, so a deploy does not depend on archive.org being up.
+  if echo "${sha}  web/examples/${name}.dwg" | shasum -a 256 -c - >/dev/null 2>&1; then
+    return
+  fi
   local zip="$tmp/${name}.zip"
   curl -fsSL --retry 3 -o "$zip" "$snapshot"
   (cd "$tmp" && unzip -oq "$zip" "${name}.dwg")
   echo "${sha}  $tmp/${name}.dwg" | shasum -a 256 -c - >/dev/null
   mv "$tmp/${name}.dwg" "web/examples/${name}.dwg"
 }
-rm -rf web/examples && mkdir -p web/examples
+mkdir -p web/examples
 fetch_example sf00c \
   "https://web.archive.org/web/20260726225654id_/https://bsm.sfdpw.org/maps/basemap_dwg/sf00c.zip" \
   3659798a03a732cc9fed261621e69a86870a69ca10c55be8e8684f434ec5c850
