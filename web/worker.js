@@ -12,15 +12,21 @@ const ready = init();
 self.onmessage = async (event) => {
   const { bytes, polygonize, tolerance, srcDef, probe, seq } = event.data;
   if (probe) {
-    // CRS-suggestion probe: convert without reprojecting and return only the
-    // drawing-coordinate bbox. `result.bbox` is a plain field on the WASM
-    // result, so the (possibly huge) GeoJSON string is never parsed. Probe
-    // failures answer as probe messages — they must never masquerade as a
-    // conversion result.
+    // CRS-detection probe: convert without reprojecting and return only the
+    // drawing-coordinate bbox plus the CRS declarations the converter found
+    // (GEODATA object, CRS-mentioning text from any space). All are plain
+    // fields on the WASM result, so the (possibly huge) GeoJSON string is
+    // never parsed. Probe failures answer as probe messages — they must
+    // never masquerade as a conversion result.
     try {
       await ready;
       const result = convert(bytes, false, undefined);
-      self.postMessage({ ok: true, probe: true, seq, bbox: result.bbox ?? null });
+      self.postMessage({
+        ok: true, probe: true, seq,
+        bbox: result.bbox ?? null,
+        geodata: result.geodata ?? null,
+        crs_text_hints: result.crs_text_hints ?? [],
+      });
     } catch (error) {
       self.postMessage({ ok: false, probe: true, seq, error: String((error && error.message) || error) });
     }

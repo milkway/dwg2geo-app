@@ -174,3 +174,7 @@ table.pop td:first-child { color: #56648a; font-weight: 600; }
   border: 1px solid rgba(90, 63, 240, .35);
 }
 .crshint .linkbtn { font-weight: 600; }
+.crshint .crsquote { display: block; margin: 4px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--fg); }
+.crshint .crsquote::before, .crshint .crsquote::after { content: '“'; color: var(--muted); }
+.crshint .crsquote::after { content: '”'; }
+.basemapctl button:disabled { opacity: .45; cursor: not-allowed; }

@@ -3,26 +3,49 @@
 // reprojection runs in a Web Worker (web/worker.js) so the tab never freezes
 // and the UI can show honest upload / processing / done states.
 
-// ---- CRS catalog (SIRGAS 2000 / UTM South, the common Brazilian zones, plus
-// WGS 84 UTM South). The selected entry's proj4 `def` string is handed to the
-// worker, which owns proj4 and does the actual reprojection. ----
+// ---- CRS catalog. UTM families that cover Brazil (SIRGAS 2000 is the
+// official datum; SAD69 and Córrego Alegre still appear on older sheets;
+// WGS 84 on GPS-derived work), zones 18–25 S and 18–22 N, plus the CRS of
+// the bundled CCSF examples. Entries are generated from the family's proj4
+// template and EPSG numbering so the catalog and the automatic detection
+// (see detectCrs) share one source of truth. ----
+const UTM_FAMILIES = [
+  { key: 'sirgas2000', name: 'SIRGAS 2000', proj: '+ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+    south: { zones: range(18, 25), epsg: (z) => 31960 + z }, north: { zones: range(18, 22), epsg: (z) => 31954 + z } },
+  { key: 'wgs84', name: 'WGS 84', proj: '+datum=WGS84 +units=m +no_defs',
+    south: { zones: range(18, 25), epsg: (z) => 32700 + z }, north: { zones: range(18, 22), epsg: (z) => 32600 + z } },
+  { key: 'sad69', name: 'SAD69', proj: '+ellps=aust_SA +towgs84=-57,1,-41,0,0,0,0 +units=m +no_defs',
+    south: { zones: range(18, 25), epsg: (z) => 29170 + z }, north: { zones: range(18, 22), epsg: (z) => 29150 + z } },
+  { key: 'corrego', name: 'Córrego Alegre 1970-72', proj: '+ellps=intl +towgs84=-206,172,-6,0,0,0,0 +units=m +no_defs',
+    south: { zones: range(21, 25), epsg: (z) => 22500 + z }, north: { zones: [], epsg: () => null } },
+];
+function range(a, b) { return Array.from({ length: b - a + 1 }, (_, i) => a + i); }
+function utmEntries(family) {
+  const out = [];
+  for (const [hemi, south] of [['south', true], ['north', false]]) {
+    for (const zone of family[hemi].zones) {
+      out.push({
+        code: `EPSG:${family[hemi].epsg(zone)}`,
+        label: `${family.name} / UTM ${zone}${south ? 'S' : 'N'}`,
+        group: family.name,
+        family: family.key, zone, south,
+        def: `+proj=utm +zone=${zone}${south ? ' +south' : ''} ${family.proj}`,
+      });
+    }
+  }
+  return out;
+}
 const CRS = [
-  { code: 'EPSG:31978', label: 'SIRGAS 2000 / UTM 18S', def: '+proj=utm +zone=18 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31979', label: 'SIRGAS 2000 / UTM 19S', def: '+proj=utm +zone=19 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31980', label: 'SIRGAS 2000 / UTM 20S', def: '+proj=utm +zone=20 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31981', label: 'SIRGAS 2000 / UTM 21S', def: '+proj=utm +zone=21 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31982', label: 'SIRGAS 2000 / UTM 22S', def: '+proj=utm +zone=22 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31983', label: 'SIRGAS 2000 / UTM 23S', def: '+proj=utm +zone=23 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31984', label: 'SIRGAS 2000 / UTM 24S', def: '+proj=utm +zone=24 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:31985', label: 'SIRGAS 2000 / UTM 25S', def: '+proj=utm +zone=25 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs' },
-  { code: 'EPSG:32722', label: 'WGS 84 / UTM 22S', def: '+proj=utm +zone=22 +south +datum=WGS84 +units=m +no_defs' },
-  { code: 'EPSG:32723', label: 'WGS 84 / UTM 23S', def: '+proj=utm +zone=23 +south +datum=WGS84 +units=m +no_defs' },
+  ...UTM_FAMILIES.flatMap(utmEntries),
   // The CRS of the CCSF Digital Basemap sheets bundled as examples (declared
   // by San Francisco Public Works in the dataset metadata, not by the DWGs).
-  { code: 'EPSG:2227', label: 'NAD83 / California zone 3 (ftUS)', def: '+proj=lcc +lat_1=38.43333333333333 +lat_2=37.06666666666667 +lat_0=36.5 +lon_0=-120.5 +x_0=2000000.0001016 +y_0=500000.0001016002 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=us-ft +no_defs' },
-  { code: 'EPSG:4326', label: 'WGS 84 (lon/lat — already geographic)', def: '+proj=longlat +datum=WGS84 +no_defs' },
-  { code: 'CUSTOM', label: 'Custom proj4 / WKT…', def: null },
+  { code: 'EPSG:2227', group: 'Other', label: 'NAD83 / California zone 3 (ftUS)', def: '+proj=lcc +lat_1=38.43333333333333 +lat_2=37.06666666666667 +lat_0=36.5 +lon_0=-120.5 +x_0=2000000.0001016 +y_0=500000.0001016002 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=us-ft +no_defs' },
+  { code: 'EPSG:4326', group: 'Other', label: 'WGS 84 (lon/lat — already geographic)', def: '+proj=longlat +datum=WGS84 +no_defs' },
+  { code: 'CUSTOM', group: 'Other', label: 'Custom proj4 / WKT…', def: null },
 ];
+function findUtm(family, zone, south) {
+  return CRS.find((c) => c.family === family && c.zone === zone && c.south === south) || null;
+}
 
 // ---- Bundled example drawings (fetched by build.sh, SHA-pinned). Loading one
 // prefills the CRS that the SOURCE declares — the drawing itself carries none,
@@ -60,65 +83,94 @@ const downloadBtn = $('download');
 const crsHint = $('crshint');
 const exampleList = $('examplelist');
 
-for (const c of CRS) {
-  const opt = document.createElement('option');
-  opt.value = c.code;
-  opt.textContent = `${c.label}${c.code.startsWith('EPSG') ? ` (${c.code})` : ''}`;
-  crsSelect.appendChild(opt);
+{
+  const groups = new Map();
+  for (const c of CRS) {
+    if (!groups.has(c.group)) {
+      const g = document.createElement('optgroup');
+      g.label = c.group;
+      groups.set(c.group, g);
+      crsSelect.appendChild(g);
+    }
+    const opt = document.createElement('option');
+    opt.value = c.code;
+    opt.textContent = `${c.label}${c.code.startsWith('EPSG') ? ` (${c.code})` : ''}`;
+    groups.get(c.group).appendChild(opt);
+  }
 }
 crsSelect.value = 'EPSG:31983';
 crsSelect.addEventListener('change', () => {
   customWrap.classList.toggle('hidden', crsSelect.value !== 'CUSTOM');
 });
 
-// ---- Map — the same CARTO "light_all" raster basemap used by brt-sorocaba ----
+// ---- Map. Streets basemap: OpenFreeMap "positron" (free vector tiles,
+// no API key, no usage cap — CARTO's raster basemaps started stamping
+// "API KEY REQUIRED" on every tile in 2026). Its style is fetched at start
+// and merged with the Esri World Imagery raster source, so both basemaps
+// live in ONE style and switching only toggles visibility (map.setStyle
+// would drop the DWG source and layers). ----
 if (typeof maplibregl === 'undefined') {
   document.getElementById('status').textContent =
     'Map library failed to load (offline or blocked). Reload to try again.';
   throw new Error('maplibre-gl unavailable');
 }
-const map = new maplibregl.Map({
-  container: 'map',
-  style: {
-    version: 8,
-    glyphs: 'https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf',
-    sources: {
-      base: {
-        type: 'raster',
-        tileSize: 256,
-        attribution:
-          '© <a href="https://carto.com/attributions">CARTO</a> · © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-        tiles: ['a', 'b', 'c', 'd'].map(
-          (s) => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png`,
-        ),
-      },
-      // Satellite imagery — the same Esri World Imagery source brt-sorocaba uses.
-      sat: {
-        type: 'raster',
-        tileSize: 256,
-        attribution: 'Esri, Maxar',
-        tiles: [
-          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        ],
-      },
-    },
-    // Both basemaps live in the style; switching toggles visibility so the
-    // DWG source/layers survive the change (map.setStyle would drop them).
-    layers: [
-      { id: 'base', type: 'raster', source: 'base' },
-      { id: 'sat', type: 'raster', source: 'sat', layout: { visibility: 'none' } },
-    ],
-  },
-  center: [-47.463, -23.5],
-  zoom: 11,
-  attributionControl: true,
-});
-map.addControl(new maplibregl.NavigationControl(), 'top-right');
+const STREETS_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
+const GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+const LABEL_FONT = ['Noto Sans Regular']; // served by GLYPHS_URL
+const SAT_SOURCE = {
+  type: 'raster',
+  tileSize: 256,
+  attribution: 'Esri, Maxar',
+  tiles: [
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  ],
+};
+let streetLayerIds = []; // basemap layers toggled by the Streets/Satellite switch
+let map = null;
 let styleReady = false;
-map.on('load', () => { styleReady = true; });
-map.on('error', (e) => {
-  // Basemap tile/style errors shouldn't break the app — the drawing still renders.
-  console.warn('MapLibre error:', e && e.error);
+
+async function fetchStreetsStyle() {
+  try {
+    const res = await fetch(STREETS_STYLE_URL, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const style = await res.json();
+    if (style.version !== 8 || !Array.isArray(style.layers)) throw new Error('not a style');
+    return style;
+  } catch (error) {
+    console.warn('Streets basemap style unavailable:', error);
+    return null;
+  }
+}
+
+const mapReady = fetchStreetsStyle().then((streets) => {
+  const style = streets
+    ? { ...streets, sources: { ...streets.sources, sat: SAT_SOURCE }, layers: [...streets.layers] }
+    : { version: 8, glyphs: GLYPHS_URL, sources: { sat: SAT_SOURCE }, layers: [] };
+  style.layers.push({ id: 'sat', type: 'raster', source: 'sat', layout: { visibility: streets ? 'none' : 'visible' } });
+  streetLayerIds = streets
+    ? streets.layers.filter((l) => !(l.layout && l.layout.visibility === 'none')).map((l) => l.id)
+    : [];
+  if (!streets) {
+    // Honest fallback: satellite only, and say why the Streets button is off.
+    const streetsBtn = basemapCtl.querySelector('button[data-base="streets"]');
+    streetsBtn.disabled = true;
+    streetsBtn.title = 'Streets basemap unavailable (offline or blocked) — satellite imagery only.';
+    setActiveBasemap(basemapCtl.querySelector('button[data-base="sat"]'));
+  }
+  map = new maplibregl.Map({
+    container: 'map',
+    style,
+    center: [-47.463, -23.5],
+    zoom: 11,
+    attributionControl: true,
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+  map.on('load', () => { styleReady = true; });
+  map.on('error', (e) => {
+    // Basemap tile/style errors shouldn't break the app — the drawing still renders.
+    console.warn('MapLibre error:', e && e.error);
+  });
+  return map;
 });
 
 // ---- Conversion worker (owns the WASM module + proj4; keeps the UI free) ----
@@ -168,34 +220,116 @@ let fileName = '';
 let loadSeq = 0; // guards against out-of-order arrayBuffer() reads
 let probeSeq = 0; // pairs probe replies with the file that requested them
 
-// ---- CRS suggestion (fail-closed by design: it only SUGGESTS) ----
-// The heuristic reads nothing but coordinate magnitudes from a quick probe
-// conversion, because a DWG carries no reliable CRS declaration — that is the
-// whole reason this app makes the operator choose. The bbox max corner is
-// used on purpose: title blocks and legends often sit near the drawing
-// origin and would poison the min corner.
+// ---- CRS detection ----
+// A DWG carries no reliable CRS declaration, which is why the operator
+// chooses. What the converter DOES surface is every declaration the drawing
+// happens to contain: a GEODATA object (AutoCAD geographic location), and
+// text strings from any space — the title block's "DATUM: UTM - SIRGAS 2000
+// - MC 33° W - FUSO 25 SUL" — as `crs_text_hints`. When one of those names
+// both a datum and a zone, the CRS is prefilled and the quote shown, so the
+// operator can see exactly what the choice rests on. Anything weaker (only a
+// zone, only coordinate magnitudes) stays a suggestion.
 const PROBE_MAX_BYTES = 32 * 1024 * 1024;
 
-function suggestCrs(bbox) {
+const DATUM_PATTERNS = [
+  ['sirgas2000', /SIRGAS/i],
+  ['wgs84', /WGS\s*-?\s*84|UTM84|\bWGS\b/i],
+  ['sad69', /SAD\s*-?\s*69|\bSAD\b/i],
+  ['corrego', /C[OÓ]RREGO\s*ALEGRE/i],
+];
+const DATUM_NAMES = { sirgas2000: 'SIRGAS 2000', wgs84: 'WGS 84', sad69: 'SAD69', corrego: 'Córrego Alegre' };
+
+// Parse one text string into { datum, zone, south } (each may be null).
+function parseCrsText(raw) {
+  const text = String(raw).replace(/%%[dD]/g, '°').replace(/\s+/g, ' ');
+  let datum = null;
+  for (const [key, re] of DATUM_PATTERNS) if (re.test(text)) { datum = key; break; }
+  let zone = null;
+  let south = null;
+  let m;
+  if ((m = text.match(/EPSG\s*:?\s*(\d{4,5})/i))) return { epsg: `EPSG:${m[1]}`, datum, zone, south };
+  if ((m = text.match(/(?:FUSO|ZONA|ZONE)\s*:?\s*(\d{1,2})\s*([NS])?\b/i))) {
+    zone = Number(m[1]);
+    if (m[2]) south = m[2].toUpperCase() === 'S';
+  } else if ((m = text.match(/UTM\s*-?\s*(?:84)?\s*-?\s*(\d{1,2})\s*([NS])\b/i))) {
+    zone = Number(m[1]);
+    south = m[2].toUpperCase() === 'S';
+  } else if ((m = text.match(/(?:\bMC\b|M\.\s*C\.|MERIDIANO\s*CENTRAL)\s*:?\s*(-?\d{1,3})\s*[°º]?\s*([WEO])?/i))) {
+    // Central meridian → zone: 33° W is zone 25 (183 − 33)/6.
+    let mc = Number(m[1]);
+    const dir = (m[2] || '').toUpperCase();
+    if (dir === 'W' || dir === 'O') mc = -Math.abs(mc);
+    const z = (183 + mc) / 6;
+    if (Number.isInteger(z) && z >= 1 && z <= 60) zone = z;
+  }
+  if (south === null) {
+    if (/\bSUL\b|\bSOUTH\b|\bS\b(?![A-Z])/i.test(text) && !/\bNORTE\b|\bNORTH\b/i.test(text)) south = true;
+    else if (/\bNORTE\b|\bNORTH\b/i.test(text)) south = false;
+  }
+  if (zone !== null && (zone < 1 || zone > 60)) zone = null;
+  return { epsg: null, datum, zone, south };
+}
+
+// Combine the evidence into a decision. Returns null or
+// { code, text, quote, apply } — apply=true when datum AND zone are declared.
+function detectCrs(probe) {
+  const bbox = probe.bbox || null;
+  const bboxSouth = bbox ? bbox[3] >= 1e6 : null; // UTM northings in the southern hemisphere
+  const looksUtm = bbox && bbox[2] >= 1e5 && bbox[2] <= 1.1e6 && bbox[3] >= 0 && bbox[3] <= 1.0e7;
+
+  const candidates = [];
+  if (probe.geodata && probe.geodata.definition_summary) {
+    candidates.push({ source: 'the drawing’s GEODATA (geographic location) object', text: probe.geodata.definition_summary });
+  }
+  for (const h of probe.crs_text_hints || []) {
+    const where = h.space === 'paper' ? 'a paper-space layout (title block)' : h.space === 'model' ? 'model-space text' : 'a block definition';
+    candidates.push({ source: `${h.entity_type} in ${where}`, text: h.text });
+  }
+
+  let partial = null;
+  for (const c of candidates) {
+    const p = parseCrsText(c.text);
+    if (p.epsg && CRS.some((e) => e.code === p.epsg)) {
+      return { code: p.epsg, quote: c.text, apply: true, text: `Source CRS declared as ${p.epsg} by ${c.source}.` };
+    }
+    const south = p.south !== null ? p.south : bboxSouth;
+    if (p.datum && p.zone !== null && south !== null) {
+      const entry = findUtm(p.datum, p.zone, south);
+      if (entry) {
+        return { code: entry.code, quote: c.text, apply: true,
+          text: `${entry.label} — declared by ${c.source}${p.south === null ? ' (hemisphere taken from the coordinates)' : ''}.` };
+      }
+      return { code: 'CUSTOM', quote: c.text, apply: false,
+        def: `+proj=utm +zone=${p.zone}${south ? ' +south' : ''} ${(UTM_FAMILIES.find((f) => f.key === p.datum) || UTM_FAMILIES[0]).proj}`,
+        text: `${DATUM_NAMES[p.datum]} / UTM ${p.zone}${south ? 'S' : 'N'} declared by ${c.source} is outside the catalog — use it as a custom proj4 string.` };
+    }
+    if (!partial && (p.zone !== null || p.datum)) partial = { ...p, source: c.source, quote: c.text };
+  }
+
+  if (partial && partial.zone !== null) {
+    const south = partial.south !== null ? partial.south : bboxSouth;
+    const entry = findUtm('sirgas2000', partial.zone, south !== null ? south : true);
+    if (entry) {
+      return { code: entry.code, quote: partial.quote, apply: false,
+        text: `UTM zone ${partial.zone} is declared by ${partial.source} but no datum — SIRGAS 2000 (Brazil’s official datum) is the likely reading; confirm.` };
+    }
+  }
   if (!bbox) return null;
   const [minx, , maxx, maxy] = bbox;
   if (Math.abs(minx) <= 180 && Math.abs(maxx) <= 180 && Math.abs(maxy) <= 90) {
-    return {
-      code: 'EPSG:4326',
-      text: 'Coordinates fit longitude/latitude ranges — this may already be WGS 84.',
-    };
+    return { code: 'EPSG:4326', apply: false, text: 'Coordinates fit longitude/latitude ranges — this may already be WGS 84.' };
   }
   if (maxx >= 5.5e6 && maxx <= 6.5e6 && maxy >= 1.7e6 && maxy <= 2.4e6) {
-    return {
-      code: 'EPSG:2227',
-      text: 'Extents match California State Plane zone 3 in US survey feet (the CRS the CCSF basemap declares).',
-    };
+    return { code: 'EPSG:2227', apply: false, text: 'Extents match California State Plane zone 3 in US survey feet (the CRS the CCSF basemap declares).' };
   }
-  if (maxy >= 6.5e6 && maxy <= 1.0e7 && maxx >= 1e5 && maxx <= 1.1e6) {
-    return {
-      code: null,
-      text: 'Extents look like southern-hemisphere UTM in metres (e.g. a SIRGAS 2000 zone). The zone cannot be inferred from coordinates — pick it from the drawing’s documentation.',
-    };
+  if (looksUtm && maxy >= 6.5e6) {
+    // An older converter build (no `crs_text_hints` field) never looked for
+    // declarations, so do not claim the drawing has none.
+    const declared = Array.isArray(probe.crs_text_hints)
+      ? 'no text in the drawing declares it'
+      : 'this converter build does not read the drawing’s text declarations';
+    return { code: null, apply: false,
+      text: `Extents look like southern-hemisphere UTM in metres${partial && partial.datum ? ` and the drawing mentions ${DATUM_NAMES[partial.datum]}` : ''}. The zone cannot be inferred from coordinates and ${declared} — pick it from the drawing’s documentation.` };
   }
   return null;
 }
@@ -205,22 +339,37 @@ function clearCrsHint() {
   crsHint.innerHTML = '';
 }
 
+function applySuggestion(suggestion) {
+  crsSelect.value = suggestion.code;
+  if (suggestion.code === 'CUSTOM' && suggestion.def) customInput.value = suggestion.def;
+  crsSelect.dispatchEvent(new Event('change'));
+}
+
 function onProbeResult(data) {
   if (data.seq !== probeSeq || !fileBytes) return; // a newer file superseded it
-  const suggestion = data.ok ? suggestCrs(data.bbox) : null;
+  const suggestion = data.ok ? detectCrs(data) : null;
   if (!suggestion) { clearCrsHint(); return; }
+  if (suggestion.apply) {
+    applySuggestion(suggestion);
+    setStatus(`Source CRS set to ${suggestion.code} from the drawing’s own declaration — confirm and convert.`, 'ok');
+  }
+  const quote = suggestion.quote
+    ? ` <q class="crsquote">${escapeHtml(suggestion.quote)}</q>`
+    : '';
+  const note = suggestion.quote
+    ? 'Read from text in the drawing — the map is only right if that text is.'
+    : 'Heuristic on coordinate magnitudes only — confirm before trusting the result.';
   crsHint.classList.remove('hidden');
   crsHint.innerHTML =
-    `<span class="hint-ic" aria-hidden="true">💡</span> ${escapeHtml(suggestion.text)}` +
-    (suggestion.code && crsSelect.value !== suggestion.code
-      ? ` <button type="button" class="linkbtn" id="applyhint">Use ${escapeHtml(suggestion.code)}</button>`
+    `<span class="hint-ic" aria-hidden="true">${suggestion.apply ? '📌' : '💡'}</span> ${escapeHtml(suggestion.text)}${quote}` +
+    (suggestion.code && !suggestion.apply && crsSelect.value !== suggestion.code
+      ? ` <button type="button" class="linkbtn" id="applyhint">Use ${escapeHtml(suggestion.code === 'CUSTOM' ? 'custom proj4' : suggestion.code)}</button>`
       : '') +
-    ' <span class="muted">Heuristic on coordinate magnitudes only — confirm before trusting the result.</span>';
+    ` <span class="muted">${note}</span>`;
   const apply = document.getElementById('applyhint');
   if (apply) {
     apply.addEventListener('click', () => {
-      crsSelect.value = suggestion.code;
-      crsSelect.dispatchEvent(new Event('change'));
+      applySuggestion(suggestion);
       clearCrsHint();
       setStatus(`Source CRS set to ${suggestion.code} — confirm it matches the drawing's documentation.`, 'ok');
     });
@@ -370,7 +519,7 @@ function renderResult(data, job) {
   const n = data.report.feature_count;
   if (!n || !data.bounds) {
     // Successful parse but nothing renderable — keep an honest empty map.
-    clearMapLayers();
+    whenStyleReady(clearMapLayers);
     layersMenu.classList.add('hidden');
     downloadBtn.classList.add('hidden');
     lastResult = null;
@@ -407,8 +556,10 @@ downloadBtn.addEventListener('click', () => {
 });
 
 function whenStyleReady(cb) {
-  if (styleReady || map.isStyleLoaded()) cb();
-  else map.once('load', cb);
+  mapReady.then(() => {
+    if (styleReady || map.isStyleLoaded()) cb();
+    else map.once('load', cb);
+  });
 }
 
 // ---- Map layers ----
@@ -458,7 +609,7 @@ function addToMap(fc) {
     layout: {
       'text-field': ['coalesce', ['get', 'text'], ''],
       'text-size': 12,
-      'text-font': ['Open Sans Regular'],
+      'text-font': LABEL_FONT,
       'text-rotation-alignment': 'map',
       'text-rotate': ['-', 0, ['coalesce', ['get', 'text_rotation_deg'], 0]],
       'text-allow-overlap': false,
@@ -559,18 +710,21 @@ layersBtn.addEventListener('click', () => {
   setLayersOpen(layersCard.classList.contains('hidden'));
 });
 
-// ---- Basemap switch (Streets ⇄ Satellite, mirroring brt-sorocaba) ----
-basemapCtl.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-base]');
-  if (!btn) return;
-  const sat = btn.dataset.base === 'sat';
-  whenStyleReady(() => {
-    map.setLayoutProperty('base', 'visibility', sat ? 'none' : 'visible');
-    map.setLayoutProperty('sat', 'visibility', sat ? 'visible' : 'none');
-  });
+// ---- Basemap switch (Streets ⇄ Satellite) ----
+function setActiveBasemap(btn) {
   for (const b of basemapCtl.querySelectorAll('button')) {
     b.classList.toggle('active', b === btn);
   }
+}
+basemapCtl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-base]');
+  if (!btn || btn.disabled) return;
+  const sat = btn.dataset.base === 'sat';
+  whenStyleReady(() => {
+    for (const id of streetLayerIds) map.setLayoutProperty(id, 'visibility', sat ? 'none' : 'visible');
+    map.setLayoutProperty('sat', 'visibility', sat ? 'visible' : 'none');
+  });
+  setActiveBasemap(btn);
 });
 
 let popupBound = false;
